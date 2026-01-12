@@ -1,4 +1,3 @@
-echo streamlit==1.28.0 > requirements.txt
-echo pandas==2.1.0 >> requirements.txt
-echo numpy==1.24.0 >> requirements.txt
-echo PyPDF2==3.0.0 >> requirements.txt
+streamlit==1.28.0 
+pandas==2.1.0 
+numpy==1.24.0 
