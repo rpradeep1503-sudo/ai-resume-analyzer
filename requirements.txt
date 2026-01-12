@@ -1,0 +1,11 @@
+streamlit
+spacy
+pandas
+numpy
+plotly
+pdfplumber
+textstat
+python-docx
+PyPDF2
+nltk
+scikit-learn
