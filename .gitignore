@@ -9,3 +9,6 @@
 "data/" 
 "venv/" 
 "data/" 
+"venv/" 
+"data/"   # if data has large files
+"app.py.txt" 
