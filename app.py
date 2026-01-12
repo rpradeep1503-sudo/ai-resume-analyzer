@@ -1,3 +1,75 @@
+# Real LinkedIn API setup (requires OAuth2)
+"""
+1. Register app at: https://www.linkedin.com/developers/
+2. Get Client ID and Client Secret
+3. Implement OAuth2 flow
+4. Use LinkedIn API endpoints
+"""
+
+def get_linkedin_profile(access_token):
+    """Real LinkedIn API call"""
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Connection': 'Keep-Alive',
+    }
+    
+    # Profile API endpoint
+    response = requests.get(
+        'https://api.linkedin.com/v2/me',
+        headers=headers
+    )
+    
+    if response.status_code == 200:
+        return response.json()
+    return None
+def enhanced_analysis_with_linkedin(resume_text, linkedin_data=None):
+    """Enhanced analysis combining resume and LinkedIn data"""
+    
+    st.subheader("🌟 Enhanced Profile Analysis")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**📄 Resume Analysis**")
+        # Your existing resume analysis...
+        
+    with col2:
+        if linkedin_data:
+            st.write("**🔗 LinkedIn Analysis**")
+            
+            # LinkedIn completeness score
+            linkedin_score = calculate_linkedin_score(linkedin_data)
+            st.metric("LinkedIn Profile Score", f"{linkedin_score}/100")
+            
+            # Recommendations for LinkedIn
+            st.write("**LinkedIn Tips:**")
+            tips = []
+            if 'summary' not in linkedin_data or len(linkedin_data['summary']) < 100:
+                tips.append("Add a detailed professional summary")
+            if len(linkedin_data.get('skills', [])) < 10:
+                tips.append("Add more skills to your LinkedIn profile")
+            if len(linkedin_data.get('experience', [])) < 2:
+                tips.append("Complete your experience section")
+            
+            for tip in tips:
+                st.write(f"• {tip}")
+
+def calculate_linkedin_score(profile_data):
+    """Calculate LinkedIn profile completeness score"""
+    score = 0
+    
+    if profile_data.get('headline'):
+        score += 15
+    if profile_data.get('summary') and len(profile_data['summary']) > 50:
+        score += 20
+    if profile_data.get('experience') and len(profile_data['experience']) > 0:
+        score += 25
+    if profile_data.get('education') and len(profile_data['education']) > 0:
+        score += 20
+    if profile_data.get('skills') and len(profile_data['skills']) > 5:
+        score += 20
+    
+    return min(score, 100)
 import streamlit as st
 import re
 
