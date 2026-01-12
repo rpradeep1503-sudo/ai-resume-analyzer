@@ -1,53 +1,11 @@
-import spacy
-import subprocess
-import sys
-# Add this function before using nlp
-import streamlit as st
-import spacy
-import subprocess
-import sys
-
-@st.cache_resource
-def load_spacy_model():
-    try:
-        return spacy.load("en_core_web_sm")
-    except OSError:
-        import subprocess
-        import sys
-        subprocess.check_call([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
-        return spacy.load("en_core_web_sm")
-
-nlp = load_spacy_model()
-
-# Download spaCy model if not present
-try:
-    nlp = spacy.load("en_core_web_sm")
-except OSError:
-    print("Downloading spaCy model...")
-    subprocess.check_call([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
-    nlp = spacy.load("en_core_web_sm")
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
-import plotly.graph_objects as go
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import nltk
-from nltk.corpus import stopwords
 import re
-import pdfplumber
-from docx import Document
-import textstat
-import spacy
-import json
-from io import StringIO
 import warnings
+import subprocess
+import sys
 warnings.filterwarnings('ignore')
-
-# Download NLTK data
-nltk.download('stopwords')
-nlp = spacy.load("en_core_web_sm")
 
 # Page config
 st.set_page_config(
@@ -79,9 +37,46 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Lazy load heavy libraries
+@st.cache_resource
+def load_nltk():
+    import nltk
+    nltk.download('stopwords', quiet=True)
+    from nltk.corpus import stopwords
+    return stopwords
+
+@st.cache_resource  
+def load_spacy():
+    import spacy
+    try:
+        nlp = spacy.load("en_core_web_sm")
+    except:
+        # Download model if not available
+        subprocess.check_call([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
+        nlp = spacy.load("en_core_web_sm")
+    return nlp
+
+@st.cache_resource
+def load_plotly():
+    import plotly.express as px
+    import plotly.graph_objects as go
+    return px, go
+
+@st.cache_resource
+def load_sklearn():
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    return TfidfVectorizer, cosine_similarity
+
+@st.cache_resource
+def load_parsers():
+    import pdfplumber
+    from docx import Document
+    return pdfplumber, Document
+
 class ResumeAnalyzer:
     def __init__(self):
-        self.stop_words = set(stopwords.words('english'))
+        self.stop_words = load_nltk().words('english')
         self.skills_db = self.load_skills_database()
         
     def load_skills_database(self):
@@ -100,10 +95,14 @@ class ResumeAnalyzer:
         text = ""
         
         if file.name.endswith('.pdf'):
+            pdfplumber, _ = load_parsers()
             with pdfplumber.open(file) as pdf:
                 for page in pdf.pages:
-                    text += page.extract_text() + "\n"
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
         elif file.name.endswith('.docx'):
+            _, Document = load_parsers()
             doc = Document(file)
             text = "\n".join([para.text for para in doc.paragraphs])
         else:
@@ -129,10 +128,16 @@ class ResumeAnalyzer:
         scores = {
             'completeness': self.calculate_completeness_score(sections),
             'skill_density': self.calculate_skill_density(sections['skills']),
-            'readability': textstat.flesch_reading_ease(text),
             'ats_score': self.calculate_ats_score(text),
             'keyword_optimization': self.calculate_keyword_score(text)
         }
+        
+        # Readability score (if textstat is available)
+        try:
+            import textstat
+            scores['readability'] = textstat.flesch_reading_ease(text)
+        except:
+            scores['readability'] = 70  # Default score
         
         # Overall score
         scores['overall'] = np.mean(list(scores.values()))
@@ -154,14 +159,18 @@ class ResumeAnalyzer:
                     })
         
         # Additional NLP-based extraction
-        doc = nlp(text)
-        for ent in doc.ents:
-            if ent.label_ in ["ORG", "PRODUCT", "TECH"]:
-                found_skills.append({
-                    'skill': ent.text,
-                    'category': 'NLP Detected',
-                    'frequency': 1
-                })
+        try:
+            nlp = load_spacy()
+            doc = nlp(text)
+            for ent in doc.ents:
+                if ent.label_ in ["ORG", "PRODUCT"]:
+                    found_skills.append({
+                        'skill': ent.text,
+                        'category': 'NLP Detected',
+                        'frequency': 1
+                    })
+        except:
+            pass
         
         return found_skills
     
@@ -183,22 +192,16 @@ class ResumeAnalyzer:
     
     def extract_experience(self, text):
         """Extract experience information"""
-        # Simple pattern matching for dates
-        experience_patterns = [
-            r'(\d{4}\s*[-–]\s*(Present|\d{4}))',  # 2020 - Present
-            r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s*\d{4}'
-        ]
-        
         lines = text.split('\n')
         experience_lines = []
         
         for line in lines:
-            if any(word in line.lower() for word in ['experience', 'worked', 'intern', 'job', 'position']):
+            if any(word in line.lower() for word in ['experience', 'worked', 'intern', 'job', 'position', 'role']):
                 experience_lines.append(line.strip())
             elif re.search(r'\b\d{4}\b.*\b(?:to|present|current)\b', line, re.IGNORECASE):
                 experience_lines.append(line.strip())
         
-        return experience_lines[:10]  # Return top 10 lines
+        return experience_lines[:10]
     
     def extract_education(self, text):
         """Extract education information"""
@@ -214,7 +217,7 @@ class ResumeAnalyzer:
     
     def extract_projects(self, text):
         """Extract project information"""
-        proj_keywords = ['project', 'built', 'developed', 'created', 'implemented']
+        proj_keywords = ['project', 'built', 'developed', 'created', 'implemented', 'designed']
         lines = text.split('\n')
         project_lines = []
         
@@ -243,65 +246,69 @@ class ResumeAnalyzer:
     
     def calculate_skill_density(self, skills):
         """Calculate skill density score"""
+        if not skills:
+            return 0
         unique_skills = len(set([s['skill'] for s in skills]))
-        return min(unique_skills * 5, 100)  # 20 skills = 100%
+        return min(unique_skills * 5, 100)
     
     def calculate_ats_score(self, text):
         """Calculate ATS (Applicant Tracking System) compatibility score"""
-        # Factors: no tables, no headers/footers, standard fonts, keyword density
         score = 70  # Base score
         
-        # Penalize for images/tables
+        # Check length
         if len(text.split()) < 300:
-            score -= 20  # Too short
+            score -= 20
         
-        # Check for common ATS issues
-        issues = [
-            ('headers/footers', -10),
-            ('tables', -15),
-            ('images', -20),
-            ('columns', -10)
-        ]
-        
-        for issue, penalty in issues:
-            if issue in text.lower():
-                score += penalty
+        # Check for common issues
+        if 'table' in text.lower():
+            score -= 10
+        if 'header' in text.lower() or 'footer' in text.lower():
+            score -= 10
         
         return max(score, 0)
     
     def calculate_keyword_score(self, text):
         """Calculate keyword optimization score"""
-        # Count action verbs
         action_verbs = ['developed', 'implemented', 'created', 'managed', 'led', 
                        'improved', 'increased', 'reduced', 'built', 'designed']
         
         count = 0
+        text_lower = text.lower()
         for verb in action_verbs:
-            count += text.lower().count(verb)
+            count += text_lower.count(verb)
         
-        return min(count * 5, 100)  # 20 action verbs = 100%
+        return min(count * 10, 100)
     
     def match_job_description(self, resume_text, job_desc):
         """Match resume with job description"""
+        TfidfVectorizer, cosine_similarity = load_sklearn()
+        
         documents = [resume_text, job_desc]
         
-        # TF-IDF Vectorization
-        vectorizer = TfidfVectorizer(stop_words='english')
-        tfidf_matrix = vectorizer.fit_transform(documents)
-        
-        # Calculate cosine similarity
-        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-        
-        # Extract missing keywords
-        resume_words = set(re.findall(r'\b[a-z]{3,}\b', resume_text.lower()))
-        job_words = set(re.findall(r'\b[a-z]{3,}\b', job_desc.lower()))
-        missing_keywords = job_words - resume_words
-        
-        return {
-            'similarity_score': round(similarity * 100, 2),
-            'missing_keywords': list(missing_keywords)[:20],
-            'match_percentage': round(similarity * 100, 2)
-        }
+        try:
+            # TF-IDF Vectorization
+            vectorizer = TfidfVectorizer(stop_words='english')
+            tfidf_matrix = vectorizer.fit_transform(documents)
+            
+            # Calculate cosine similarity
+            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+            
+            # Extract missing keywords
+            resume_words = set(re.findall(r'\b[a-z]{3,}\b', resume_text.lower()))
+            job_words = set(re.findall(r'\b[a-z]{3,}\b', job_desc.lower()))
+            missing_keywords = job_words - resume_words
+            
+            return {
+                'similarity_score': round(similarity * 100, 2),
+                'missing_keywords': list(missing_keywords)[:15],
+                'match_percentage': round(similarity * 100, 2)
+            }
+        except:
+            return {
+                'similarity_score': 50,
+                'missing_keywords': [],
+                'match_percentage': 50
+            }
     
     def generate_recommendations(self, scores, sections):
         """Generate personalized recommendations"""
@@ -319,24 +326,13 @@ class ResumeAnalyzer:
         if scores['ats_score'] < 70:
             recommendations.append("🤖 Use standard fonts and avoid tables for better ATS parsing")
         
-        if len(sections['skills']) < 10:
-            recommendations.append("📚 Include at least 10-15 specific technical skills")
+        if len(sections['skills']) < 5:
+            recommendations.append("📚 Include at least 5-10 specific technical skills")
         
-        if len(sections['experience']) < 3:
+        if len(sections['experience']) < 2:
             recommendations.append("💼 Add more detailed experience descriptions with metrics")
         
         return recommendations
-    
-    def generate_ai_insights(self, text):
-        """Generate AI-powered insights using GPT (optional)"""
-        # This uses OpenAI API - you can skip or use free alternatives
-        insights = [
-            "✅ Strong technical skills section with relevant keywords",
-            "📈 Consider adding quantifiable achievements in experience",
-            "🎯 Good alignment with software engineering roles",
-            "📊 Projects section could benefit from more technical details"
-        ]
-        return insights
 
 def main():
     st.markdown("<h1 class='main-header'>🤖 AI Resume Analyzer & Job Matcher</h1>", unsafe_allow_html=True)
@@ -353,13 +349,24 @@ def main():
                                placeholder="Paste the job description here...")
         
         sample_jobs = {
-            "Software Engineer": "Looking for Python developer with Django/Flask experience...",
-            "Data Scientist": "Machine Learning, Python, SQL, statistical analysis required...",
-            "DevOps Engineer": "AWS, Docker, Kubernetes, CI/CD pipeline experience needed..."
+            "Software Engineer": """Looking for a Python developer with 2+ years experience in Django/Flask. 
+            Required skills: Python, Django, REST APIs, SQL, Git, AWS.
+            Nice to have: React, Docker, CI/CD, Machine Learning.
+            Responsibilities: Build scalable web applications, design APIs, collaborate with team.""",
+            
+            "Data Scientist": """Machine Learning Engineer needed with expertise in Python.
+            Required: Python, Pandas, NumPy, Scikit-learn, SQL, statistics.
+            Nice to have: TensorFlow, PyTorch, AWS SageMaker, big data tools.
+            Responsibilities: Build ML models, analyze data, create predictive analytics.""",
+            
+            "DevOps Engineer": """DevOps Engineer with cloud experience.
+            Required: AWS, Docker, Kubernetes, Jenkins, Linux, CI/CD.
+            Nice to have: Terraform, Ansible, Python scripting, monitoring tools.
+            Responsibilities: Manage infrastructure, automate deployments, ensure reliability."""
         }
         
         selected_job = st.selectbox("Or choose sample job:", list(sample_jobs.keys()))
-        if selected_job:
+        if selected_job and not job_desc:
             job_desc = sample_jobs[selected_job]
     
     # Main content
@@ -368,7 +375,7 @@ def main():
         resume_text = analyzer.extract_text(resume_file)
         sections, scores = analyzer.analyze_resume(resume_text)
         
-        # Create two columns for scores
+        # Create score cards
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -413,12 +420,14 @@ def main():
                 
                 # Skills by category
                 if not skills_df.empty:
+                    px, _ = load_plotly()
                     fig = px.bar(skills_df, x='category', color='category',
                                 title='Skills Distribution by Category')
                     st.plotly_chart(fig, use_container_width=True)
                     
                     # Display skills table
-                    st.dataframe(skills_df[['skill', 'category', 'frequency']].sort_values('frequency', ascending=False))
+                    st.dataframe(skills_df[['skill', 'category', 'frequency']].sort_values('frequency', ascending=False), 
+                                use_container_width=True)
             else:
                 st.warning("No skills detected. Add more technical skills to your resume.")
         
@@ -428,6 +437,7 @@ def main():
                 match_result = analyzer.match_job_description(resume_text, job_desc)
                 
                 # Match score with gauge
+                _, go = load_plotly()
                 fig = go.Figure(go.Indicator(
                     mode="gauge+number",
                     value=match_result['similarity_score'],
@@ -437,25 +447,22 @@ def main():
                         'axis': {'range': [None, 100]},
                         'bar': {'color': "darkblue"},
                         'steps': [
-                            {'range': [0, 50], 'color': "red"},
-                            {'range': [50, 75], 'color': "yellow"},
-                            {'range': [75, 100], 'color': "green"}
-                        ],
-                        'threshold': {
-                            'line': {'color': "black", 'width': 4},
-                            'thickness': 0.75,
-                            'value': match_result['similarity_score']
-                        }
+                            {'range': [0, 50], 'color': "lightcoral"},
+                            {'range': [50, 75], 'color': "lightyellow"},
+                            {'range': [75, 100], 'color': "lightgreen"}
+                        ]
                     }
                 ))
+                fig.update_layout(height=300)
                 st.plotly_chart(fig, use_container_width=True)
                 
                 # Missing keywords
                 if match_result['missing_keywords']:
-                    st.subheader("Missing Keywords")
+                    st.subheader("Missing Keywords (add these to your resume)")
+                    # Display as chips/badges
                     cols = st.columns(4)
-                    for idx, keyword in enumerate(match_result['missing_keywords'][:8]):
-                        cols[idx % 4].markdown(f"🔴 {keyword}")
+                    for idx, keyword in enumerate(match_result['missing_keywords'][:12]):
+                        cols[idx % 4].markdown(f"<div style='background-color: #f0f0f0; padding: 8px; margin: 5px; border-radius: 5px; text-align: center;'>🔴 {keyword}</div>", unsafe_allow_html=True)
             else:
                 st.info("Add a job description to see matching analysis")
         
@@ -463,26 +470,34 @@ def main():
             st.subheader("Personalized Recommendations")
             recommendations = analyzer.generate_recommendations(scores, sections)
             
-            for i, rec in enumerate(recommendations, 1):
-                st.markdown(f"{i}. {rec}")
+            if recommendations:
+                for i, rec in enumerate(recommendations, 1):
+                    st.markdown(f"{i}. {rec}")
+            else:
+                st.success("Great job! Your resume looks strong.")
             
-            # AI Insights
-            st.subheader("AI-Powered Insights")
-            insights = analyzer.generate_ai_insights(resume_text)
-            for insight in insights:
-                st.success(insight)
+            # Additional insights
+            st.subheader("Resume Insights")
+            if len(resume_text.split()) < 300:
+                st.warning("Your resume seems short. Consider adding more details about your experience and projects.")
+            if scores['skill_density'] > 80:
+                st.success("Excellent skill diversity!")
+            if scores['ats_score'] > 80:
+                st.success("Good ATS compatibility!")
         
         with tab4:
             st.subheader("Resume Analysis Dashboard")
             
             # Radar chart for scores
-            categories = list(scores.keys())[:-1]  # Exclude overall
+            categories = list(scores.keys())[:-1]
             
+            _, go = load_plotly()
             fig = go.Figure(data=go.Scatterpolar(
                 r=[scores[c] for c in categories],
                 theta=categories,
                 fill='toself',
-                name='Your Resume'
+                name='Your Resume',
+                line=dict(color='blue')
             ))
             
             fig.update_layout(
@@ -492,16 +507,11 @@ def main():
                         range=[0, 100]
                     )),
                 showlegend=True,
+                height=500,
                 title="Resume Analysis Radar Chart"
             )
             
             st.plotly_chart(fig, use_container_width=True)
-            
-            # Word cloud (simulated)
-            st.subheader("Keyword Frequency")
-            if sections['skills']:
-                skills_text = ' '.join([s['skill'] for s in sections['skills']])
-                # You can add wordcloud here if you install wordcloud package
     
     else:
         # Landing page
@@ -527,12 +537,10 @@ def main():
             - Interview preparation
             """)
         
-        # Sample analysis
+        # Sample resume text
         st.subheader("📊 Try with Sample Resume")
-        if st.button("Analyze Sample Engineering Resume"):
-            with open("sample_engineering_resume.txt", "w") as f:
-                f.write("""John Doe - Software Engineer
-                
+        sample_resume = """John Doe - Software Engineer
+
 Contact: john@email.com | 123-456-7890 | linkedin.com/in/johndoe
 
 SKILLS
@@ -555,9 +563,17 @@ Software Development Intern
 Tech Company | Summer 2023
 - Developed REST APIs using Django REST Framework
 - Implemented authentication system
-- Reduced API response time by 40%""")
+- Reduced API response time by 40%"""
+        
+        if st.button("Analyze Sample Engineering Resume"):
+            # Create a file-like object
+            import io
+            sample_file = io.BytesIO(sample_resume.encode())
+            sample_file.name = "sample_resume.txt"
             
-            st.success("Sample resume analyzed! Upload your own for personalized analysis.")
+            # Rerun with sample file
+            st.session_state['sample_file'] = sample_file
+            st.rerun()
 
 if __name__ == "__main__":
     main()
