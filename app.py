@@ -1,6 +1,23 @@
 import spacy
 import subprocess
 import sys
+# Add this function before using nlp
+import streamlit as st
+import spacy
+import subprocess
+import sys
+
+@st.cache_resource
+def load_spacy_model():
+    try:
+        return spacy.load("en_core_web_sm")
+    except OSError:
+        import subprocess
+        import sys
+        subprocess.check_call([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
+        return spacy.load("en_core_web_sm")
+
+nlp = load_spacy_model()
 
 # Download spaCy model if not present
 try:
